@@ -1,0 +1,109 @@
+name: CI Build HTOP From Upstream
+on:
+  # push:
+    # branches:
+  #   #   - main
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: htop
+    outputs:
+      latest_versions: ${{ steps.get_version.outputs.latest }}
+      previous_versions: ${{ steps.get_version.outputs.previous }}
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: ${{ vars.TEMP }}
+          
+      - name: Checkout htop upstream repository
+        uses: actions/checkout@v4
+        with:
+          repository: htop-dev/htop
+          fetch-depth: 0
+          path: ${{ vars.REMOTE_REPO }}
+          
+      - name: Compare the tag version from upstream repository
+        id: get_version
+        run: |
+          latest_tag=$(git -C ${{ vars.REMOTE_REPO }} describe --abbrev=0 --tags)
+          [ -f ${{ vars.TEMP }}/${{ vars.VERSION_TAG }} ] || touch ${{ vars.TEMP }}/${{ vars.VERSION_TAG }}
+          previous_tag=$(cat ${{ vars.TEMP }}/${{ vars.VERSION_TAG }})
+          if [ "$latest_tag" != "$previous_tag" ]; then
+            echo "latest=$latest_tag" >> $GITHUB_OUTPUT
+            echo "previous=$previous_tag" >> $GITHUB_OUTPUT
+            echo "$latest_tag" > ${{ vars.TEMP }}/${{ vars.VERSION_TAG }}
+          else
+            echo "$latest_tag" still same as before
+          fi
+          
+      - name: Commit & Push changes
+        if: ${{ steps.get_version.outputs.latest != steps.get_version.outputs.previous }}
+        uses: actions-js/push@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          directory: ${{ vars.TEMP }}
+
+  build:
+    needs: check
+    if: ${{ needs.check.outputs.latest_versions != needs.check.outputs.previous_versions }}
+    runs-on: ubuntu-latest
+    environment: htop
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: htop-dev/htop
+          ref: ${{ needs.check.outputs.latest_versions }}
+          
+      - name: Install dependencies
+        run: sudo apt install -y libncursesw5-dev autotools-dev autoconf automake build-essential libcap-dev libsensors-dev
+
+      - name: Compile code
+        run: |
+          ./autogen.sh && ./configure --enable-static --enable-capabilities --enable-sensors && make -j `nproc`
+          
+      - name: Archive build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.PROGRAM_NAME }}-latest
+          path: ./${{ vars.PROGRAM_NAME }}
+
+  release:
+      needs: 
+        - check
+        - build
+      runs-on: ubuntu-latest
+      environment: htop
+      permissions:
+        contents: write
+      steps:
+        - run: |
+            echo ${{ needs.check.outputs.latest_versions }}
+        - name: Download release artifacts
+          uses: actions/download-artifact@v4
+          with:
+            path: artifacts
+            
+        - name: Get the current date
+          id: date
+          run: echo "CURRENT_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+          
+        - name: Create tarball release
+          run: tar cvf ./${{ vars.PROGRAM_NAME }}-${{ needs.check.outputs.latest_versions }}.tar.gz ./artifacts/${{ vars.PROGRAM_NAME }}-latest/${{ vars.PROGRAM_NAME }}
+            
+        - name: Upload release build artifacts to GitHub Release
+          uses: softprops/action-gh-release@v2
+          with:
+            name: ${{ vars.PROGRAM_NAME }}-${{ needs.check.outputs.latest_versions }}-amd64
+            tag_name: ${{ env.CURRENT_DATE }}
+            draft: false
+            make_latest: true
+            files: ${{ vars.PROGRAM_NAME }}-${{ needs.check.outputs.latest_versions }}.tar.gz
