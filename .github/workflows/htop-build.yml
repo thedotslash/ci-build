@@ -97,7 +97,9 @@ jobs:
           run: echo "CURRENT_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
           
         - name: Create tarball release
-          run: tar cvf ./${{ vars.PROGRAM_NAME }}-${{ needs.check.outputs.latest_versions }}.tar.gz ./artifacts/${{ vars.PROGRAM_NAME }}-latest/${{ vars.PROGRAM_NAME }}
+          run: |
+            mv ./artifacts/${{ vars.PROGRAM_NAME }}-latest/${{ vars.PROGRAM_NAME }} ./${{ vars.PROGRAM_NAME }}
+            tar cvf ./${{ vars.PROGRAM_NAME }}-${{ needs.check.outputs.latest_versions }}.tar.gz ./${{ vars.PROGRAM_NAME }}
             
         - name: Upload release build artifacts to GitHub Release
           uses: softprops/action-gh-release@v2
